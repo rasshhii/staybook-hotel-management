@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Staybook — Boutique Hotel Operations & Room Booking</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Fixed Background Layer -->
+  <div class="bg-media" aria-hidden="true">
+    <div class="bg-overlay"></div>
+  </div>
+
+  <div class="app-shell">
+    <!-- Left Brand Rail (Desktop) / Top Bar (Mobile) -->
+    <aside class="brand-rail" aria-label="Brand rail">
+      <div class="rail-top">
+        <div class="brand-logo" title="Staybook Operations">
+          <!-- Custom line icon combining a hotel doorway, location pin, and minimal room key -->
+          <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" class="logo-mark" aria-hidden="true">
+            <!-- Doorway Frame -->
+            <path d="M10 33V14C10 8.47715 14.4772 4 20 4C25.5228 4 30 8.47715 30 14V33" stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <!-- Location Pin / Keyhole Core -->
+            <circle cx="20" cy="15" r="4" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round"/>
+            <path d="M20 19V28" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round"/>
+            <!-- Minimal Key notches -->
+            <path d="M20 23H24" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round"/>
+            <path d="M20 27H23" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round"/>
+            <!-- Door sill base -->
+            <path d="M7 33H33" stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div class="wordmark-container">
+          <span class="brand-wordmark">STAYBOOK</span>
+        </div>
+      </div>
+      <div class="rail-bottom">
+        <div class="ops-indicator">
+          <span class="status-pulse-dot" aria-hidden="true"></span>
+          <span class="ops-tag">OPS / 01</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Viewport Content -->
+    <div class="main-viewport">
+      <!-- Top Global Header -->
+      <header class="top-nav">
+        <div class="top-nav-left">
+          <span class="nav-breadcrumbs">Property operations / Front desk</span>
+        </div>
+        <div class="top-nav-right">
+          <div class="live-desk-pill">
+            <span class="live-dot" aria-hidden="true"></span>
+            <span id="liveDeskDate" class="live-date-text">Live desk · Oct 22</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- Main Operational Dashboard Layout -->
+      <main class="dashboard-container">
+        <!-- Hero Section -->
+        <section class="hero-section" aria-labelledby="hero-heading">
+          <div class="hero-content">
+            <p class="hero-eyebrow">A CALMER WAY TO RUN THE ROOMS</p>
+            <h1 id="hero-heading" class="hero-title">
+              Make the next<br>
+              <span class="stay-accent-wrap">
+                <span class="stay-accent">stay</span>
+                <svg class="stay-underline-svg" viewBox="0 0 130 18" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                  <path d="M4 14C35 4 85 4 126 10" stroke="#F4D35E" stroke-width="5" stroke-linecap="square"/>
+                </svg>
+              </span> easy.
+            </h1>
+            <p class="hero-subtext">Search the right room, keep the dates honest, and give every arrival a smooth beginning.</p>
+          </div>
+
+          <aside class="hero-rhythm-card" aria-label="Today's rhythm">
+            <div class="rhythm-number">00</div>
+            <div class="rhythm-body">
+              <h2 class="rhythm-heading">Today’s rhythm</h2>
+              <p class="rhythm-text">Keep availability visible from first check-in to last checkout.</p>
+            </div>
+          </aside>
+        </section>
+
+        <!-- Asymmetric Workspace Grid: Main Column (01 & 02) + Sticky Booking Card -->
+        <div class="workspace-grid">
+          <!-- Primary Content Column -->
+          <div class="workspace-primary">
+            
+            <!-- SECTION 01: Find a room -->
+            <section class="ops-card section-find" id="sectionFindRoom" aria-labelledby="find-title">
+              <div class="card-header">
+                <div class="section-badge-group">
+                  <span class="section-index">01</span>
+                  <h2 id="find-title" class="section-title">Find a room</h2>
+                </div>
+                <span class="section-meta-label">Availability search</span>
+              </div>
+
+              <form id="searchForm" class="search-form" novalidate>
+                <div class="form-grid">
+                  <div class="form-field">
+                    <label for="searchRoomType">Room type</label>
+                    <div class="select-wrapper">
+                      <select id="searchRoomType" name="type">
+                        <option value="">All room types</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="form-field">
+                    <label for="searchCheckIn">Check-in</label>
+                    <input type="date" id="searchCheckIn" name="checkIn" required>
+                  </div>
+                  <div class="form-field">
+                    <label for="searchCheckOut">Check-out</label>
+                    <input type="date" id="searchCheckOut" name="checkOut" required>
+                  </div>
+                </div>
+
+                <div class="form-action-row">
+                  <button type="submit" id="btnSearchRooms" class="btn btn-deep-ink">
+                    <span>Search rooms</span>
+                    <span class="btn-arrow" aria-hidden="true">→</span>
+                  </button>
+                  <button type="button" id="btnResetSearch" class="btn btn-ghost" style="display: none;">
+                    Clear dates
+                  </button>
+                </div>
+              </form>
+
+              <!-- Live Availability Results Region -->
+              <div class="availability-feedback-wrapper" aria-live="polite" id="availabilityRegion">
+                <p id="availabilityStateNotice" class="search-state-message">
+                  Choose dates to see which rooms can make the stay.
+                </p>
+                <div id="availabilityResultsGrid" class="availability-cards-grid" style="display: none;">
+                  <!-- Dynamic availability cards -->
+                </div>
+              </div>
+            </section>
+
+            <!-- SECTION 02: Room directory -->
+            <section class="ops-card section-directory" id="sectionDirectory" aria-labelledby="directory-title">
+              <div class="card-header">
+                <div class="section-badge-group">
+                  <span class="section-index">02</span>
+                  <h2 id="directory-title" class="section-title">Room directory</h2>
+                </div>
+                <button type="button" id="btnOpenAddRoom" class="btn-link-action">
+                  <span>Add a room</span>
+                  <span class="btn-arrow" aria-hidden="true">↗</span>
+                </button>
+              </div>
+
+              <!-- Room Directory Table / List -->
+              <div class="room-directory-wrapper" aria-live="polite">
+                <div class="table-container">
+                  <table class="rooms-table" id="roomsTable">
+                    <thead>
+                      <tr>
+                        <th scope="col" class="col-room">Room</th>
+                        <th scope="col" class="col-type">Type</th>
+                        <th scope="col" class="col-price">Price</th>
+                        <th scope="col" class="col-status">Status</th>
+                        <th scope="col" class="col-actions"><span class="sr-only">Actions</span></th>
+                      </tr>
+                    </thead>
+                    <tbody id="roomsTableBody">
+                      <!-- Dynamic room rows loaded via API -->
+                    </tbody>
+                  </table>
+                </div>
+                <div id="emptyRoomsNotice" class="empty-state-notice" style="display: none;">
+                  No rooms configured yet. Click "Add a room ↗" to create your first room.
+                </div>
+              </div>
+            </section>
+
+          </div>
+
+          <!-- Sticky Booking Card Column -->
+          <aside class="workspace-booking-sidebar">
+            <div class="booking-card sticky-card" id="bookingCard">
+              <div class="booking-card-header">
+                <div class="eyebrow-row">
+                  <span class="booking-eyebrow">RESERVE THE RIGHT ROOM</span>
+                  <span class="booking-corner-icon" aria-hidden="true">↘</span>
+                </div>
+                <h2 class="booking-heading">New booking</h2>
+                <p class="booking-subtext">Dates first. Details second. No surprises at the desk.</p>
+              </div>
+
+              <form id="bookingForm" class="booking-form" novalidate>
+                <div class="booking-field">
+                  <label for="bookingGuestName">Guest name</label>
+                  <input type="text" id="bookingGuestName" name="guestName" placeholder="e.g. Maya Chen" required autocomplete="off">
+                </div>
+
+                <div class="booking-field">
+                  <label for="bookingRoomSelect">Room</label>
+                  <div class="select-wrapper dark-select">
+                    <select id="bookingRoomSelect" name="roomId" required>
+                      <option value="">Search availability first</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="booking-row-2col">
+                  <div class="booking-field">
+                    <label for="bookingCheckIn">Check-in</label>
+                    <input type="date" id="bookingCheckIn" name="checkIn" required>
+                  </div>
+                  <div class="booking-field">
+                    <label for="bookingCheckOut">Check-out</label>
+                    <input type="date" id="bookingCheckOut" name="checkOut" required>
+                  </div>
+                </div>
+
+                <!-- Inline Form Feedback -->
+                <div id="bookingInlineAlert" class="booking-inline-alert" role="alert" style="display: none;"></div>
+
+                <button type="submit" id="btnConfirmBooking" class="btn btn-booking-submit">
+                  <span>Confirm booking</span>
+                  <span class="btn-arrow" aria-hidden="true">↗</span>
+                </button>
+              </form>
+
+              <div class="booking-info-notice">
+                <span class="info-circle-icon" aria-hidden="true">i</span>
+                <p class="info-text">Overlapping dates are blocked automatically. A room only stays available when the dates agree.</p>
+              </div>
+            </div>
+          </aside>
+        </div>
+
+        <!-- SECTION 03: Booking Ledger (Full-width underneath workspace) -->
+        <section class="ops-card section-ledger" id="sectionLedger" aria-labelledby="ledger-title">
+          <div class="card-header">
+            <div class="section-badge-group">
+              <span class="section-index">03</span>
+              <h2 id="ledger-title" class="section-title">Booking ledger</h2>
+            </div>
+            <span class="ledger-count-pill" id="activeStaysCount">0 active stays</span>
+          </div>
+
+          <div class="ledger-wrapper" aria-live="polite" id="ledgerRegion">
+            <div class="table-container">
+              <table class="ledger-table" id="ledgerTable">
+                <thead>
+                  <tr>
+                    <th scope="col" class="col-guest">Guest</th>
+                    <th scope="col" class="col-room">Room</th>
+                    <th scope="col" class="col-checkin">Check-in</th>
+                    <th scope="col" class="col-checkout">Check-out</th>
+                    <th scope="col" class="col-cancel"><span class="sr-only">Cancel action</span></th>
+                  </tr>
+                </thead>
+                <tbody id="ledgerTableBody">
+                  <!-- Dynamic booking rows -->
+                </tbody>
+              </table>
+            </div>
+            <div id="emptyLedgerNotice" class="ledger-empty-notice">
+              No active stays yet. Your next arrival will appear here.
+            </div>
+          </div>
+        </section>
+
+        <!-- Global Operations Footer -->
+        <footer class="global-footer">
+          <div class="footer-brand">STAYBOOK / PROPERTY OPERATIONS</div>
+          <div class="footer-tagline">Built for the in-between moments.</div>
+        </footer>
+      </main>
+    </div>
+  </div>
+
+  <!-- Room Modal (Add / Edit) -->
+  <dialog id="roomDialog" class="ops-dialog" aria-labelledby="dialogTitle">
+    <div class="dialog-shell">
+      <div class="dialog-header">
+        <div>
+          <h3 id="dialogTitle" class="dialog-title">Add a room</h3>
+          <p class="dialog-subtext">Keep the room board current for the next arrival.</p>
+        </div>
+        <button type="button" class="dialog-close-btn" id="btnCloseRoomDialog" aria-label="Close dialog">&times;</button>
+      </div>
+
+      <form id="roomForm" class="dialog-form" novalidate>
+        <input type="hidden" id="roomFormId" name="id">
+
+        <div class="dialog-fields-grid">
+          <div class="form-field">
+            <label for="roomFormNumber">Room number</label>
+            <input type="text" id="roomFormNumber" name="roomNo" placeholder="e.g. 101" required>
+          </div>
+
+          <div class="form-field">
+            <label for="roomFormType">Room type</label>
+            <input type="text" id="roomFormType" name="type" placeholder="e.g. Garden King" required list="roomTypeSuggestions">
+            <datalist id="roomTypeSuggestions">
+              <option value="Garden King"></option>
+              <option value="Accessible Queen"></option>
+              <option value="Poolside Twin"></option>
+              <option value="Terrace Suite"></option>
+              <option value="Ocean King"></option>
+              <option value="Penthouse"></option>
+            </datalist>
+          </div>
+
+          <div class="form-field">
+            <label for="roomFormPrice">Nightly price (₹)</label>
+            <input type="number" id="roomFormPrice" name="price" min="0" step="1" placeholder="e.g. 185" required>
+          </div>
+
+          <div class="form-field">
+            <label for="roomFormStatus">Status</label>
+            <div class="select-wrapper">
+              <select id="roomFormStatus" name="status" required>
+                <option value="available">Available</option>
+                <option value="maintenance">Maintenance</option>
+                <option value="inactive">Inactive</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div id="roomDialogAlert" class="dialog-alert" role="alert" style="display: none;"></div>
+
+        <div class="dialog-actions">
+          <button type="button" class="btn btn-ghost" id="btnCancelRoom">Cancel</button>
+          <button type="submit" class="btn btn-deep-ink" id="btnSaveRoom">
+            <span>Save room</span>
+            <span class="btn-arrow" aria-hidden="true">→</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </dialog>
+
+  <!-- Confirmation Modal (Delete Room / Cancel Booking) -->
+  <dialog id="confirmDialog" class="ops-dialog confirm-dialog" aria-labelledby="confirmTitle">
+    <div class="dialog-shell">
+      <div class="dialog-header">
+        <h3 id="confirmTitle" class="dialog-title">Confirm Action</h3>
+        <button type="button" class="dialog-close-btn" id="btnCloseConfirmDialog" aria-label="Close dialog">&times;</button>
+      </div>
+      <div class="dialog-body">
+        <p id="confirmMessage" class="confirm-message-text">Are you sure you want to proceed?</p>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" id="btnConfirmCancel">Never mind</button>
+        <button type="button" class="btn btn-coral" id="btnConfirmProceed">Proceed</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Restrained Toast Notification Container -->
+  <div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
