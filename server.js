@@ -43,6 +43,108 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_bookings_room_dates
   ON bookings(room_id, check_in, check_out, status);
+
+  CREATE TABLE IF NOT EXISTS guest_profiles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guest_name TEXT NOT NULL,
+    email TEXT,
+    phone TEXT,
+    address TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS guest_preferences (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guest_id INTEGER NOT NULL,
+    preference_key TEXT NOT NULL,
+    preference_value TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (guest_id, preference_key),
+    FOREIGN KEY (guest_id) REFERENCES guest_profiles(id) ON DELETE CASCADE
+  );
+  CREATE TABLE IF NOT EXISTS housekeeping_status (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id INTEGER NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'clean',
+    assigned_to TEXT,
+    notes TEXT,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
+  );
+  CREATE TABLE IF NOT EXISTS maintenance_tickets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id INTEGER,
+    title TEXT NOT NULL,
+    description TEXT,
+    priority TEXT NOT NULL DEFAULT 'normal',
+    status TEXT NOT NULL DEFAULT 'open',
+    assigned_to TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TEXT,
+    FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE SET NULL
+  );
+  CREATE TABLE IF NOT EXISTS addons (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    price REAL NOT NULL DEFAULT 0 CHECK (price >= 0),
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS digital_checkins (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    booking_id INTEGER NOT NULL,
+    guest_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'pending',
+    identity_reference TEXT,
+    signature TEXT,
+    submitted_at TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (booking_id) REFERENCES bookings(id) ON DELETE CASCADE,
+    FOREIGN KEY (guest_id) REFERENCES guest_profiles(id) ON DELETE SET NULL
+  );
+  CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guest_id INTEGER,
+    booking_id INTEGER,
+    channel TEXT NOT NULL,
+    subject TEXT,
+    message TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    sent_at TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (guest_id) REFERENCES guest_profiles(id) ON DELETE SET NULL,
+    FOREIGN KEY (booking_id) REFERENCES bookings(id) ON DELETE SET NULL
+  );
+  CREATE TABLE IF NOT EXISTS analytics_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    metric_name TEXT NOT NULL,
+    metric_value REAL NOT NULL,
+    metric_date TEXT NOT NULL,
+    dimensions TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (metric_name, metric_date)
+  );
+  CREATE TABLE IF NOT EXISTS privacy_audit_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor TEXT NOT NULL,
+    action TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT,
+    details TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS booking_metadata (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    booking_id INTEGER NOT NULL,
+    metadata_key TEXT NOT NULL,
+    metadata_value TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (booking_id, metadata_key),
+    FOREIGN KEY (booking_id) REFERENCES bookings(id) ON DELETE CASCADE
+  );
 `);
 
 // Seed initial rooms if empty
@@ -99,7 +201,12 @@ function isValidDateString(dateStr) {
   if (!dateStr || typeof dateStr !== 'string') return false;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false;
   const d = new Date(dateStr + 'T00:00:00Z');
-  return !isNaN(d.getTime());
+  if (isNaN(d.getTime())) return false;
+
+  const [year, month, day] = dateStr.split('-').map(Number);
+  return d.getUTCFullYear() === year
+    && d.getUTCMonth() + 1 === month
+    && d.getUTCDate() === day;
 }
 
 // ==========================================
@@ -623,6 +730,228 @@ app.delete('/api/bookings/:id', (req, res) => {
   } catch (error) {
     console.error('Error cancelling booking:', error);
     res.status(500).json({ error: 'Failed to cancel booking.', code: 'SERVER_ERROR' });
+  }
+});
+
+// ==========================================
+// OPERATIONS EXTENSION API
+// ==========================================
+// These resources deliberately use the local SQLite database only.  The
+// whitelist below keeps request fields and SQL identifiers explicit.
+const extensionResources = {
+  guests: {
+    table: 'guest_profiles',
+    fields: ['guest_name', 'email', 'phone', 'address', 'notes'],
+    required: ['guest_name'],
+    aliases: ['guest-profiles'],
+    hasUpdatedAt: true
+  },
+  preferences: {
+    table: 'guest_preferences',
+    fields: ['guest_id', 'preference_key', 'preference_value'],
+    required: ['guest_id', 'preference_key', 'preference_value'],
+    aliases: ['guest-preferences']
+  },
+  housekeeping: {
+    table: 'housekeeping_status',
+    fields: ['room_id', 'status', 'assigned_to', 'notes'],
+    required: ['room_id', 'status'],
+    aliases: ['housekeeping/rooms'],
+    hasUpdatedAt: true
+  },
+  maintenance: {
+    table: 'maintenance_tickets',
+    fields: ['room_id', 'title', 'description', 'priority', 'status', 'assigned_to', 'resolved_at'],
+    required: ['title'],
+    aliases: ['maintenance-tickets']
+  },
+  addons: {
+    table: 'addons',
+    fields: ['name', 'description', 'price', 'active'],
+    required: ['name'],
+    aliases: ['add-ons']
+  },
+  checkins: {
+    table: 'digital_checkins',
+    fields: ['booking_id', 'guest_id', 'status', 'identity_reference', 'signature', 'submitted_at'],
+    required: ['booking_id'],
+    aliases: ['digital-checkins']
+  },
+  notifications: {
+    table: 'notifications',
+    fields: ['guest_id', 'booking_id', 'channel', 'subject', 'message', 'status', 'sent_at'],
+    required: ['channel', 'message']
+  },
+  metrics: {
+    table: 'analytics_metrics',
+    fields: ['metric_name', 'metric_value', 'metric_date', 'dimensions'],
+    required: ['metric_name', 'metric_value', 'metric_date'],
+    aliases: ['analytics/metrics']
+  },
+  audit: {
+    table: 'privacy_audit_records',
+    fields: ['actor', 'action', 'entity_type', 'entity_id', 'details'],
+    required: ['actor', 'action', 'entity_type'],
+    aliases: ['privacy/audit']
+  },
+  metadata: {
+    table: 'booking_metadata',
+    fields: ['booking_id', 'metadata_key', 'metadata_value'],
+    required: ['booking_id', 'metadata_key', 'metadata_value'],
+    aliases: ['booking-metadata'],
+    hasUpdatedAt: true
+  }
+};
+
+function extensionError(res, status, code, error) {
+  return res.status(status).json({ error, code });
+}
+
+function extensionValue(value, field) {
+  if (['guest_id', 'room_id', 'booking_id', 'id'].includes(field)) {
+    const number = Number(value);
+    return Number.isInteger(number) && number > 0 ? number : null;
+  }
+  if (['price', 'metric_value'].includes(field)) {
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 ? number : null;
+  }
+  if (field === 'active') return value === true || value === 1 || value === '1' ? 1 : 0;
+  if (typeof value !== 'string' && field !== 'details' && field !== 'dimensions') return null;
+  return value;
+}
+
+function extensionRow(row) {
+  if (!row) return row;
+  for (const field of ['dimensions', 'details']) {
+    if (row[field]) {
+      try { row[field] = JSON.parse(row[field]); } catch (error) { /* preserve legacy text */ }
+    }
+  }
+  return row;
+}
+
+function extensionPayload(req, resource, isUpdate) {
+  if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+    return { error: 'Request body must be a JSON object.', code: 'INVALID_REQUEST' };
+  }
+  const values = {};
+  for (const field of resource.fields) {
+    const camelField = field.replace(/_([a-z])/g, (match, letter) => letter.toUpperCase());
+    const supplied = req.body[field] !== undefined ? req.body[field] : req.body[camelField];
+    if (supplied !== undefined) {
+      const value = extensionValue(supplied, field);
+      if (value === null || (typeof value === 'string' && !value.trim() && resource.required.includes(field))) {
+        return { error: `${field} is invalid.`, code: 'INVALID_FIELD' };
+      }
+      values[field] = (typeof value === 'string' && field !== 'details' && field !== 'dimensions') ? value.trim() : value;
+    }
+  }
+  if (!isUpdate) {
+    for (const field of resource.required) {
+      if (values[field] === undefined || values[field] === null || values[field] === '') {
+        return { error: `${field} is required.`, code: 'MISSING_FIELD' };
+      }
+    }
+  } else if (Object.keys(values).length === 0) {
+    return { error: 'At least one supported field is required.', code: 'INVALID_REQUEST' };
+  }
+  for (const field of ['details', 'dimensions']) {
+    if (values[field] !== undefined && typeof values[field] !== 'string') values[field] = JSON.stringify(values[field]);
+  }
+  return { values };
+}
+
+function registerExtensionResource(name, resource, routeName) {
+  const route = `/api/${routeName}`;
+  app.get(route, (req, res) => {
+    try {
+      const rows = db.prepare(`SELECT * FROM ${resource.table} ORDER BY id DESC`).all();
+      res.json(rows.map(extensionRow));
+    } catch (error) {
+      console.error(`Error reading ${name}:`, error);
+      extensionError(res, 500, 'SERVER_ERROR', `Failed to retrieve ${name}.`);
+    }
+  });
+  app.get(`${route}/:id`, (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) return extensionError(res, 400, 'INVALID_ID', 'Invalid record ID.');
+    try {
+      const row = db.prepare(`SELECT * FROM ${resource.table} WHERE id = ?`).get(id);
+      if (!row) return extensionError(res, 404, 'NOT_FOUND', `${name} record not found.`);
+      res.json(extensionRow(row));
+    } catch (error) {
+      console.error(`Error reading ${name}:`, error);
+      extensionError(res, 500, 'SERVER_ERROR', `Failed to retrieve ${name}.`);
+    }
+  });
+  app.post(route, (req, res) => {
+    const payload = extensionPayload(req, resource, false);
+    if (payload.error) return extensionError(res, 400, payload.code, payload.error);
+    try {
+      const fields = Object.keys(payload.values);
+      const result = db.prepare(
+        `INSERT INTO ${resource.table} (${fields.join(', ')}) VALUES (${fields.map(() => '?').join(', ')})`
+      ).run(...fields.map(field => payload.values[field]));
+      const created = db.prepare(`SELECT * FROM ${resource.table} WHERE id = ?`).get(result.lastInsertRowid);
+      res.status(201).json(extensionRow(created));
+    } catch (error) {
+      if (error.code && error.code.startsWith('SQLITE_CONSTRAINT')) {
+        return extensionError(res, 409, 'CONFLICT', 'The record conflicts with an existing record or reference.');
+      }
+      console.error(`Error creating ${name}:`, error);
+      extensionError(res, 500, 'SERVER_ERROR', `Failed to create ${name}.`);
+    }
+  });
+  app.put(`${route}/:id`, (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) return extensionError(res, 400, 'INVALID_ID', 'Invalid record ID.');
+    const payload = extensionPayload(req, resource, true);
+    if (payload.error) return extensionError(res, 400, payload.code, payload.error);
+    try {
+      const fields = Object.keys(payload.values);
+      const result = db.prepare(
+        `UPDATE ${resource.table} SET ${fields.map(field => `${field} = ?`).join(', ')}${resource.hasUpdatedAt ? ', updated_at = CURRENT_TIMESTAMP' : ''} WHERE id = ?`
+      ).run(...fields.map(field => payload.values[field]), id);
+      if (!result.changes) return extensionError(res, 404, 'NOT_FOUND', `${name} record not found.`);
+      res.json(extensionRow(db.prepare(`SELECT * FROM ${resource.table} WHERE id = ?`).get(id)));
+    } catch (error) {
+      if (error.code && error.code.startsWith('SQLITE_CONSTRAINT')) return extensionError(res, 409, 'CONFLICT', 'The update conflicts with an existing record.');
+      console.error(`Error updating ${name}:`, error);
+      extensionError(res, 500, 'SERVER_ERROR', `Failed to update ${name}.`);
+    }
+  });
+  app.delete(`${route}/:id`, (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) return extensionError(res, 400, 'INVALID_ID', 'Invalid record ID.');
+    try {
+      const result = db.prepare(`DELETE FROM ${resource.table} WHERE id = ?`).run(id);
+      if (!result.changes) return extensionError(res, 404, 'NOT_FOUND', `${name} record not found.`);
+      res.json({ ok: true, id });
+    } catch (error) {
+      console.error(`Error deleting ${name}:`, error);
+      extensionError(res, 500, 'SERVER_ERROR', `Failed to delete ${name}.`);
+    }
+  });
+}
+
+for (const [name, resource] of Object.entries(extensionResources)) {
+  registerExtensionResource(name, resource, name);
+  (resource.aliases || []).forEach(alias => registerExtensionResource(name, resource, alias));
+}
+
+app.get('/api/analytics/summary', (req, res) => {
+  try {
+    const summary = {
+      rooms: db.prepare('SELECT COUNT(*) AS total FROM rooms').get().total,
+      bookings: db.prepare("SELECT COUNT(*) AS total FROM bookings WHERE status = 'confirmed'").get().total,
+      openMaintenance: db.prepare("SELECT COUNT(*) AS total FROM maintenance_tickets WHERE status NOT IN ('resolved', 'closed')").get().total,
+      housekeeping: db.prepare('SELECT status, COUNT(*) AS total FROM housekeeping_status GROUP BY status').all()
+    };
+    res.json(summary);
+  } catch (error) {
+    console.error('Error reading analytics summary:', error);
+    extensionError(res, 500, 'SERVER_ERROR', 'Failed to retrieve analytics summary.');
   }
 });
 

@@ -201,6 +201,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
       renderRoomsTable();
       updateBookingRoomOptions();
+      renderHousekeeping();
+      const maintenanceRoom = document.getElementById('maintenanceRoom');
+      if (maintenanceRoom) {
+        maintenanceRoom.innerHTML = '<option value="">Room</option>' + state.rooms.map(room => `<option value="${room.id}">Room ${escapeHTML(room.roomNo)}</option>`).join('');
+      }
     } catch (err) {
       console.error(err);
       showToast('Could not load room board. Check network connection.', 'error');
@@ -213,6 +218,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!res.ok) throw new Error('Failed to fetch bookings');
       const data = await res.json();
       state.bookings = data;
+      populateCheckinBookings();
       renderBookingLedger();
       // Also re-render rooms in case status changed
       renderRoomsTable();
@@ -782,9 +788,198 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // ==========================================
+  // SECTION 04: CALM OPERATIONS WORKSPACE
+  // ==========================================
+  const operationsState = {
+    housekeeping: [],
+    maintenance: [],
+    guests: [],
+    addons: []
+  };
+  const operationFetch = async (url, options) => {
+    const response = await fetch(url, options);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Operation failed.');
+    return data;
+  };
+
+  function renderHousekeeping() {
+    const list = document.getElementById('housekeepingList');
+    if (!list) return;
+    const statuses = ['clean', 'cleaning', 'inspected', 'ready'];
+    list.innerHTML = state.rooms.map(room => {
+      const record = operationsState.housekeeping.find(item => item.room_id === room.id);
+      const current = record ? record.status : 'clean';
+      return `<div class="operations-list-item">
+        <div><strong>Room ${escapeHTML(room.roomNo)}</strong><small>${escapeHTML(room.type)} · ${escapeHTML(current)}</small></div>
+        <div class="state-buttons">${statuses.map(status => `<button type="button" class="state-button ${current === status ? 'active' : ''}" data-room-id="${room.id}" data-state="${status}">${status}</button>`).join('')}</div>
+      </div>`;
+    }).join('');
+    list.querySelectorAll('.state-button').forEach(button => {
+      button.addEventListener('click', async () => {
+        try {
+          const roomId = Number(button.dataset.roomId);
+          const existing = operationsState.housekeeping.find(item => item.room_id === roomId);
+          const method = existing ? 'PUT' : 'POST';
+          const url = existing ? `/api/housekeeping/${existing.id}` : '/api/housekeeping';
+          await operationFetch(url, {
+            method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ roomId, status: button.dataset.state })
+          });
+          await loadOperations();
+          showToast(`Room ${state.rooms.find(room => room.id === roomId)?.roomNo || ''} marked ${button.dataset.state}.`);
+        } catch (error) {
+          showToast(error.message, 'error');
+        }
+      });
+    });
+  }
+
+  function renderMaintenance() {
+    const list = document.getElementById('maintenanceList');
+    if (!list) return;
+    list.innerHTML = operationsState.maintenance.length
+      ? operationsState.maintenance.slice(0, 5).map(ticket => `<div class="operations-list-item">
+          <div><strong>${escapeHTML(ticket.title)}</strong><small>${ticket.room_id ? `Room ${ticket.room_id}` : 'Property'} · ${escapeHTML(ticket.priority)}</small></div>
+          <small>${escapeHTML(ticket.status)}</small>
+        </div>`).join('')
+      : '<p class="panel-empty">No open repairs. A quiet board is a good board.</p>';
+  }
+
+  function renderAddons() {
+    const list = document.getElementById('addonList');
+    if (!list) return;
+    list.innerHTML = operationsState.addons.filter(addon => addon.active).map(addon =>
+      `<span class="tag-item">${escapeHTML(addon.name)} · ${formatMoney(addon.price)}</span>`
+    ).join('') || '<span class="panel-empty">No add-ons configured.</span>';
+  }
+
+  async function loadOperations() {
+    try {
+      const [summary, housekeeping, maintenance, guests, addons] = await Promise.all([
+        operationFetch('/api/analytics/summary'),
+        operationFetch('/api/housekeeping'),
+        operationFetch('/api/maintenance'),
+        operationFetch('/api/guests'),
+        operationFetch('/api/addons')
+      ]);
+      operationsState.housekeeping = housekeeping;
+      operationsState.maintenance = maintenance.filter(ticket => !['resolved', 'closed'].includes(ticket.status));
+      operationsState.guests = guests;
+      operationsState.addons = addons;
+      document.getElementById('metricRooms').textContent = summary.rooms;
+      document.getElementById('metricBookings').textContent = summary.bookings;
+      document.getElementById('metricMaintenance').textContent = summary.openMaintenance;
+      renderHousekeeping();
+      renderMaintenance();
+      renderAddons();
+      const roomSelect = document.getElementById('maintenanceRoom');
+      roomSelect.innerHTML = '<option value="">Room</option>' + state.rooms.map(room => `<option value="${room.id}">Room ${escapeHTML(room.roomNo)}</option>`).join('');
+    } catch (error) {
+      console.error(error);
+      showToast('Operations workspace could not be loaded.', 'error');
+    }
+  }
+
+  document.getElementById('guestProfileForm').addEventListener('submit', async event => {
+    event.preventDefault();
+    const status = document.getElementById('guestProfileStatus');
+    try {
+      const guest = await operationFetch('/api/guests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          guestName: document.getElementById('guestNameProfile').value.trim(),
+          email: document.getElementById('guestEmailProfile').value.trim(),
+          phone: document.getElementById('guestPhoneProfile').value.trim()
+        })
+      });
+      const preference = document.getElementById('guestPreferenceProfile').value.trim();
+      if (preference) {
+        await operationFetch('/api/preferences', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ guestId: guest.id, preferenceKey: 'stay-preference', preferenceValue: preference })
+        });
+      }
+      status.textContent = 'Guest profile saved locally.';
+      event.target.reset();
+      await loadOperations();
+    } catch (error) {
+      status.textContent = error.message;
+    }
+  });
+
+  document.getElementById('maintenanceForm').addEventListener('submit', async event => {
+    event.preventDefault();
+    try {
+      await operationFetch('/api/maintenance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          roomId: document.getElementById('maintenanceRoom').value || undefined,
+          title: document.getElementById('maintenanceTitle').value.trim(),
+          priority: document.getElementById('maintenancePriority').value
+        })
+      });
+      event.target.reset();
+      showToast('Repair added to the maintenance desk.');
+      await loadOperations();
+    } catch (error) {
+      showToast(error.message, 'error');
+    }
+  });
+
+  document.getElementById('btnCreateCheckin').addEventListener('click', async () => {
+    const bookingId = document.getElementById('checkinBooking').value;
+    const status = document.getElementById('checkinStatus');
+    if (!bookingId) {
+      status.textContent = 'Choose a booking first.';
+      return;
+    }
+    try {
+      await operationFetch('/api/checkins', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bookingId, status: 'invited' })
+      });
+      status.textContent = 'Digital check-in created locally.';
+    } catch (error) {
+      status.textContent = error.message;
+    }
+  });
+
+  document.getElementById('btnAddAddon').addEventListener('click', async () => {
+    const name = document.getElementById('addonName').value.trim();
+    const price = Number(document.getElementById('addonPrice').value);
+    if (!name || !Number.isFinite(price) || price < 0) return showToast('Enter an add-on name and valid price.', 'error');
+    try {
+      await operationFetch('/api/addons', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, price, active: true })
+      });
+      document.getElementById('addonName').value = '';
+      document.getElementById('addonPrice').value = '';
+      await loadOperations();
+    } catch (error) {
+      showToast(error.message, 'error');
+    }
+  });
+
+  function populateCheckinBookings() {
+    const select = document.getElementById('checkinBooking');
+    select.innerHTML = '<option value="">Choose booking</option>' + state.bookings.map(booking =>
+      `<option value="${booking.id}">${escapeHTML(booking.guestName)} · Room ${escapeHTML(booking.room?.roomNo || '')}</option>`
+    ).join('');
+  }
+
+  // ==========================================
   // INITIALIZATION
   // ==========================================
   initHeaderDate();
   fetchRooms();
   fetchBookings();
+  loadOperations();
 });

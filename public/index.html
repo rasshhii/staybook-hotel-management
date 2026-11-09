@@ -272,6 +272,87 @@
           </div>
         </section>
 
+        <!-- SECTION 04: Calm operations workspace -->
+        <section class="ops-card operations-workspace" id="sectionOperations" aria-labelledby="operations-title">
+          <div class="card-header">
+            <div class="section-badge-group">
+              <span class="section-index">04</span>
+              <h2 id="operations-title" class="section-title">Calm operations</h2>
+            </div>
+            <span class="section-meta-label">Housekeeping · guests · maintenance</span>
+          </div>
+
+          <div class="ops-metrics" id="opsMetrics" aria-live="polite">
+            <div class="ops-metric"><span class="ops-metric-value" id="metricRooms">—</span><span class="ops-metric-label">rooms</span></div>
+            <div class="ops-metric"><span class="ops-metric-value" id="metricBookings">—</span><span class="ops-metric-label">confirmed stays</span></div>
+            <div class="ops-metric"><span class="ops-metric-value" id="metricMaintenance">—</span><span class="ops-metric-label">open repairs</span></div>
+          </div>
+
+          <div class="operations-grid">
+            <div class="operations-panel">
+              <div class="operations-panel-heading">
+                <h3>Room readiness</h3>
+                <span class="panel-caption">Tap a state to keep arrivals honest.</span>
+              </div>
+              <div id="housekeepingList" class="operations-list">
+                <p class="panel-empty">Loading room readiness…</p>
+              </div>
+            </div>
+
+            <div class="operations-panel">
+              <div class="operations-panel-heading">
+                <h3>Guest profile</h3>
+                <span class="panel-caption">Preferences stay local to this property.</span>
+              </div>
+              <form id="guestProfileForm" class="operations-form" novalidate>
+                <input id="guestProfileId" type="hidden">
+                <input id="guestNameProfile" type="text" placeholder="Guest name" required>
+                <div class="operations-form-row">
+                  <input id="guestEmailProfile" type="email" placeholder="Email">
+                  <input id="guestPhoneProfile" type="tel" placeholder="Phone">
+                </div>
+                <input id="guestPreferenceProfile" type="text" placeholder="Preference · e.g. quiet room, king bed">
+                <button class="btn btn-deep-ink" type="submit">Save guest profile <span class="btn-arrow">→</span></button>
+              </form>
+              <p id="guestProfileStatus" class="panel-status" role="status"></p>
+            </div>
+
+            <div class="operations-panel">
+              <div class="operations-panel-heading">
+                <h3>Maintenance desk</h3>
+                <span class="panel-caption">Capture the next best action.</span>
+              </div>
+              <form id="maintenanceForm" class="operations-form" novalidate>
+                <div class="operations-form-row">
+                  <select id="maintenanceRoom" required><option value="">Room</option></select>
+                  <select id="maintenancePriority"><option value="normal">Normal</option><option value="high">High</option><option value="urgent">Urgent</option></select>
+                </div>
+                <input id="maintenanceTitle" type="text" placeholder="What needs attention?" required>
+                <button class="btn btn-ghost" type="submit">Log repair <span class="btn-arrow">↗</span></button>
+              </form>
+              <div id="maintenanceList" class="operations-list compact-list"></div>
+            </div>
+
+            <div class="operations-panel">
+              <div class="operations-panel-heading">
+                <h3>Guest-ready tools</h3>
+                <span class="panel-caption">Flexible stays without paper chasing.</span>
+              </div>
+              <div class="operations-tool-row">
+                <select id="checkinBooking"><option value="">Choose booking</option></select>
+                <button type="button" class="btn btn-ghost" id="btnCreateCheckin">Start digital check-in</button>
+              </div>
+              <div id="checkinStatus" class="panel-status" role="status"></div>
+              <div class="operations-tool-row">
+                <input id="addonName" type="text" placeholder="Add-on name">
+                <input id="addonPrice" type="number" min="0" placeholder="₹ price">
+                <button type="button" class="btn btn-ghost" id="btnAddAddon">Add</button>
+              </div>
+              <div id="addonList" class="tag-list"></div>
+            </div>
+          </div>
+        </section>
+
         <!-- Global Operations Footer -->
         <footer class="global-footer">
           <div class="footer-brand">STAYBOOK / PROPERTY OPERATIONS</div>
