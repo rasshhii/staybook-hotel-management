@@ -14,7 +14,12 @@ if (!fs.existsSync(dataDir)) {
 }
 
 // Database setup
-const dbPath = path.join(dataDir, 'staybook.db');
+const dbPath = process.env.DB_PATH
+  || (process.env.VERCEL ? path.join('/tmp', 'staybook.db') : path.join(dataDir, 'staybook.db'));
+const dbDirectory = path.dirname(dbPath);
+if (!fs.existsSync(dbDirectory)) {
+  fs.mkdirSync(dbDirectory, { recursive: true });
+}
 const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
@@ -964,19 +969,23 @@ app.get('*', (req, res) => {
 });
 
 // Start Server
-const server = app.listen(PORT, HOST, () => {
-  console.log(`Staybook operations server running at http://${HOST}:${PORT}`);
-  console.log(`Access the dashboard in your browser: http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  const server = app.listen(PORT, HOST, () => {
+    console.log(`Staybook operations server running at http://${HOST}:${PORT}`);
+    console.log(`Access the dashboard in your browser: http://localhost:${PORT}`);
+  });
 
-server.on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    console.error(`\n[Staybook] Error: Port ${PORT} is already in use.`);
-    console.error(`You can either free port ${PORT} or specify a different port:`);
-    console.error(`  PowerShell: $env:PORT=3001; npm start`);
-    console.error(`  CMD:        set PORT=3001 && npm start\n`);
-  } else {
-    console.error('[Staybook] Server error:', err);
-  }
-  process.exit(1);
-});
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`\n[Staybook] Error: Port ${PORT} is already in use.`);
+      console.error(`You can either free port ${PORT} or specify a different port:`);
+      console.error(`  PowerShell: $env:PORT=3001; npm start`);
+      console.error(`  CMD:        set PORT=3001 && npm start\n`);
+    } else {
+      console.error('[Staybook] Server error:', err);
+    }
+    process.exit(1);
+  });
+}
+
+module.exports = app;
