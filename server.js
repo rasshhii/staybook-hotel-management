@@ -1,35 +1,51 @@
-
 const express = require('express');
 const path = require('path');
-const fs = require('fs');
-const Database = require('better-sqlite3');
+const { createClient } = require('@libsql/client');
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 const HOST = '0.0.0.0';
 
-// Database setup
-// Vercel uses temporary writable storage.
-// Local development uses the project's data folder.
+if (!process.env.TURSO_DATABASE_URL || !process.env.TURSO_AUTH_TOKEN) {
+  throw new Error('Set TURSO_DATABASE_URL and TURSO_AUTH_TOKEN in the environment.');
+}
 
-const isVercel = Boolean(process.env.VERCEL);
-const dataDir = path.join(__dirname, 'data');
+const client = createClient({
+  url: process.env.TURSO_DATABASE_URL,
+  authToken: process.env.TURSO_AUTH_TOKEN
+});
 
-const dbPath = isVercel
-  ? path.join('/tmp', 'staybook.db')
-  : (process.env.DB_PATH || path.join(dataDir, 'staybook.db'));
+// Adapter retains existing SQL while awaiting remote database calls.
+function makeDb(executor) {
+  return {
+    prepare(sql) {
+      return {
+        async get(...args) {
+          const result = await executor.execute({ sql, args });
+          return result.rows[0] || undefined;
+        },
+        async all(...args) {
+          const result = await executor.execute({ sql, args });
+          return result.rows;
+        },
+        async run(...args) {
+          const result = await executor.execute({ sql, args });
+          return {
+            changes: result.rowsAffected,
+            lastInsertRowid: result.lastInsertRowid == null
+              ? null
+              : Number(result.lastInsertRowid)
+          };
+        }
+      };
+    }
+  };
+}
 
-// Create only the directory containing the selected database path
-const dbDirectory = path.dirname(dbPath);
-fs.mkdirSync(dbDirectory, { recursive: true });
-
-const db = new Database(dbPath);
-
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+const db = makeDb(client);
 
 // Initialize Database Schema
-db.exec(`
+const schemaSql = `
   CREATE TABLE IF NOT EXISTS rooms (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     room_no TEXT NOT NULL UNIQUE,
@@ -163,37 +179,61 @@ db.exec(`
     UNIQUE (booking_id, metadata_key),
     FOREIGN KEY (booking_id) REFERENCES bookings(id) ON DELETE CASCADE
   );
-`);
+`;
 
-// Seed initial rooms if empty
-const countRooms = db.prepare('SELECT COUNT(*) as count FROM rooms').get();
+async function initializeDatabase() {
+  for (const statement of schemaSql.split(';').map(s => s.trim()).filter(Boolean)) {
+    await client.execute(statement);
+  }
 
-if (countRooms.count === 0) {
-  const insertRoom = db.prepare(`
-    INSERT INTO rooms (room_no, type, price, status)
-    VALUES (?, ?, ?, ?)
-  `);
+  // Seed initial rooms if empty
+  const countRooms = await db.prepare(
+    'SELECT COUNT(*) as count FROM rooms'
+  ).get();
 
-  const initialRooms = [
-    { roomNo: '101', type: 'Garden King', price: 185, status: 'available' },
-    { roomNo: '107', type: 'Accessible Queen', price: 165, status: 'available' },
-    { roomNo: '204', type: 'Poolside Twin', price: 220, status: 'available' },
-    { roomNo: '305', type: 'Terrace Suite', price: 340, status: 'available' },
-    { roomNo: '402', type: 'Ocean King', price: 295, status: 'available' },
-    { roomNo: '501', type: 'Penthouse', price: 520, status: 'available' }
-  ];
+  if (countRooms.count === 0) {
+    const insertRoom = db.prepare(`
+      INSERT OR IGNORE INTO rooms (room_no, type, price, status)
+      VALUES (?, ?, ?, ?)
+    `);
 
-  const seedTransaction = db.transaction((rooms) => {
-    for (const r of rooms) {
-      insertRoom.run(r.roomNo, r.type, r.price, r.status);
-    }
-  });
+    const initialRooms = [
+      { roomNo: '101', type: 'Garden King', price: 185, status: 'available' },
+      { roomNo: '107', type: 'Accessible Queen', price: 165, status: 'available' },
+      { roomNo: '204', type: 'Poolside Twin', price: 220, status: 'available' },
+      { roomNo: '305', type: 'Terrace Suite', price: 340, status: 'available' },
+      { roomNo: '402', type: 'Ocean King', price: 295, status: 'available' },
+      { roomNo: '501', type: 'Penthouse', price: 520, status: 'available' }
+    ];
 
-  seedTransaction(initialRooms);
+    const seedTransaction = async (rooms) => {
+      for (const r of rooms) {
+        await insertRoom.run(r.roomNo, r.type, r.price, r.status);
+      }
+    };
+
+    await seedTransaction(initialRooms);
+  }
 }
+
+const ready = initializeDatabase();
+ready.catch(err => console.error('Turso database initialization failed:', err));
 
 // Middleware
 app.use(express.json());
+
+app.use(async (req, res, next) => {
+  try {
+    await ready;
+    next();
+  } catch (error) {
+    console.error('Database unavailable:', error);
+    res.status(503).json({
+      error: 'Database unavailable',
+      code: 'DATABASE_UNAVAILABLE'
+    });
+  }
+});
 
 // Handle malformed JSON
 app.use((err, req, res, next) => {
@@ -235,7 +275,7 @@ function isValidDateString(dateStr) {
 // ==========================================
 
 // Health Check
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
   res.json({
     ok: true,
     service: 'staybook'
@@ -243,18 +283,18 @@ app.get('/api/health', (req, res) => {
 });
 
 // GET /api/rooms
-app.get('/api/rooms', (req, res) => {
+app.get('/api/rooms', async (req, res) => {
   try {
     const today = getTodayString();
 
-    const rawRooms = db.prepare(`
+    const rawRooms = await db.prepare(`
       SELECT id, room_no, type, price, status
       FROM rooms
       ORDER BY CAST(room_no AS INTEGER) ASC, room_no ASC
     `).all();
 
     // Query active bookings for today and next check-in
-    const occupiedRows = db.prepare(`
+    const occupiedRows = await db.prepare(`
       SELECT DISTINCT room_id
       FROM bookings
       WHERE status = 'confirmed'
@@ -264,7 +304,7 @@ app.get('/api/rooms', (req, res) => {
 
     const occupiedRoomIds = new Set(occupiedRows.map(r => r.room_id));
 
-    const nextCheckInRows = db.prepare(`
+    const nextCheckInRows = await db.prepare(`
       SELECT room_id, MIN(check_in) as nextCheckIn
       FROM bookings
       WHERE status = 'confirmed'
@@ -312,15 +352,14 @@ app.get('/api/rooms', (req, res) => {
 });
 
 // POST /api/rooms
-app.post('/api/rooms', (req, res) => {
+app.post('/api/rooms', async (req, res) => {
   if (!req.body || typeof req.body !== 'object') {
     return res.status(400).json({
       error: 'Request body must be a JSON object.',
       code: 'INVALID_REQUEST'
     });
   }
-
-  const { roomNo, type, price, status } = req.body;
+    const { roomNo, type, price, status } = req.body;
 
   if (!roomNo || typeof roomNo !== 'string' || roomNo.trim() === '') {
     return res.status(400).json({
@@ -356,7 +395,7 @@ app.post('/api/rooms', (req, res) => {
   }
 
   try {
-    const existing = db.prepare(
+    const existing = await db.prepare(
       'SELECT id FROM rooms WHERE room_no = ?'
     ).get(roomNo.trim());
 
@@ -372,14 +411,14 @@ app.post('/api/rooms', (req, res) => {
       VALUES (?, ?, ?, ?)
     `);
 
-    const result = insert.run(
+    const result = await insert.run(
       roomNo.trim(),
       type.trim(),
       numPrice,
       normalizedStatus
     );
 
-    const created = db.prepare(
+    const created = await db.prepare(
       'SELECT id, room_no, type, price, status FROM rooms WHERE id = ?'
     ).get(result.lastInsertRowid);
 
@@ -404,7 +443,7 @@ app.post('/api/rooms', (req, res) => {
 });
 
 // PUT /api/rooms/:id
-app.put('/api/rooms/:id', (req, res) => {
+app.put('/api/rooms/:id', async (req, res) => {
   const roomId = parseInt(req.params.id, 10);
 
   if (isNaN(roomId)) {
@@ -423,7 +462,7 @@ app.put('/api/rooms/:id', (req, res) => {
 
   const { roomNo, type, price, status } = req.body;
 
-  const existingRoom = db.prepare(
+  const existingRoom = await db.prepare(
     'SELECT * FROM rooms WHERE id = ?'
   ).get(roomId);
 
@@ -480,8 +519,7 @@ app.put('/api/rooms/:id', (req, res) => {
     });
   }
 
-  // Check unique room number against other rooms
-  const dupCheck = db.prepare(
+  const dupCheck = await db.prepare(
     'SELECT id FROM rooms WHERE room_no = ? AND id != ?'
   ).get(updatedRoomNo, roomId);
 
@@ -493,13 +531,13 @@ app.put('/api/rooms/:id', (req, res) => {
   }
 
   try {
-    db.prepare(`
+    await db.prepare(`
       UPDATE rooms
       SET room_no = ?, type = ?, price = ?, status = ?
       WHERE id = ?
     `).run(updatedRoomNo, updatedType, updatedPrice, updatedStatus, roomId);
 
-    const updated = db.prepare(
+    const updated = await db.prepare(
       'SELECT id, room_no, type, price, status FROM rooms WHERE id = ?'
     ).get(roomId);
 
@@ -520,7 +558,7 @@ app.put('/api/rooms/:id', (req, res) => {
 });
 
 // DELETE /api/rooms/:id
-app.delete('/api/rooms/:id', (req, res) => {
+app.delete('/api/rooms/:id', async (req, res) => {
   const roomId = parseInt(req.params.id, 10);
 
   if (isNaN(roomId)) {
@@ -530,7 +568,7 @@ app.delete('/api/rooms/:id', (req, res) => {
     });
   }
 
-  const room = db.prepare(
+  const room = await db.prepare(
     'SELECT * FROM rooms WHERE id = ?'
   ).get(roomId);
 
@@ -541,10 +579,9 @@ app.delete('/api/rooms/:id', (req, res) => {
     });
   }
 
-  // Check if room has active or upcoming confirmed bookings
   const today = getTodayString();
 
-  const activeBooking = db.prepare(`
+  const activeBooking = await db.prepare(`
     SELECT id FROM bookings
     WHERE room_id = ?
       AND status = 'confirmed'
@@ -560,7 +597,7 @@ app.delete('/api/rooms/:id', (req, res) => {
   }
 
   try {
-    db.prepare('DELETE FROM rooms WHERE id = ?').run(roomId);
+    await db.prepare('DELETE FROM rooms WHERE id = ?').run(roomId);
 
     res.json({
       ok: true,
@@ -576,8 +613,7 @@ app.delete('/api/rooms/:id', (req, res) => {
 });
 
 // GET /api/availability
-// Query: ?type=Garden%20King&checkIn=2026-12-01&checkOut=2026-12-03
-app.get('/api/availability', (req, res) => {
+app.get('/api/availability', async (req, res) => {
   const { type, checkIn, checkOut } = req.query;
 
   if (!checkIn || !checkOut) {
@@ -611,10 +647,6 @@ app.get('/api/availability', (req, res) => {
   }
 
   try {
-    // Rooms must:
-    // 1. Have status 'available'
-    // 2. Match selected room type if provided
-    // 3. Not have an overlapping confirmed booking
     let sql = `
       SELECT r.id, r.room_no, r.type, r.price, r.status
       FROM rooms r
@@ -637,7 +669,7 @@ app.get('/api/availability', (req, res) => {
 
     sql += ' ORDER BY CAST(r.room_no AS INTEGER) ASC, r.room_no ASC';
 
-    const availableRooms = db.prepare(sql).all(...params);
+    const availableRooms = await db.prepare(sql).all(...params);
 
     const formatted = availableRooms.map(r => ({
       id: r.id,
@@ -655,11 +687,10 @@ app.get('/api/availability', (req, res) => {
     });
   }
 });
-
 // GET /api/bookings
-app.get('/api/bookings', (req, res) => {
+app.get('/api/bookings', async (req, res) => {
   try {
-    const bookings = db.prepare(`
+    const bookings = await db.prepare(`
       SELECT
         b.id,
         b.guest_name,
@@ -703,7 +734,7 @@ app.get('/api/bookings', (req, res) => {
 });
 
 // POST /api/bookings
-app.post('/api/bookings', (req, res) => {
+app.post('/api/bookings', async (req, res) => {
   if (!req.body || typeof req.body !== 'object') {
     return res.status(400).json({
       error: 'Request body must be a JSON object.',
@@ -759,89 +790,69 @@ app.post('/api/bookings', (req, res) => {
     });
   }
 
-  // Room verification & Transaction-safe booking creation
   try {
-    const bookTransaction = db.transaction(() => {
-      // 1. Verify room exists and status is available
-      const room = db.prepare(
-        'SELECT id, room_no, type, price, status FROM rooms WHERE id = ?'
-      ).get(parsedRoomId);
+    // Verify room and booking conflict before inserting.
+    const room = await db.prepare(
+      'SELECT id, room_no, type, price, status FROM rooms WHERE id = ?'
+    ).get(parsedRoomId);
 
-      if (!room) {
-        const err = new Error('Room not found.');
-        err.statusCode = 404;
-        err.code = 'ROOM_NOT_FOUND';
-        throw err;
-      }
-
-      if (room.status.toLowerCase() !== 'available') {
-        const err = new Error(
-          `Room ${room.room_no} is currently marked as ${room.status} and cannot be booked.`
-        );
-        err.statusCode = 400;
-        err.code = 'ROOM_UNAVAILABLE';
-        throw err;
-      }
-
-      // 2. Overlap check with half-open interval
-      const conflict = db.prepare(`
-        SELECT id FROM bookings
-        WHERE room_id = ?
-          AND status = 'confirmed'
-          AND check_in < ?
-          AND check_out > ?
-        LIMIT 1
-      `).get(parsedRoomId, checkOut, checkIn);
-
-      if (conflict) {
-        const err = new Error(
-          'Those dates overlap an existing reservation. Try another room or date range.'
-        );
-        err.statusCode = 409;
-        err.code = 'BOOKING_CONFLICT';
-        throw err;
-      }
-
-      // 3. Insert reservation
-      const insert = db.prepare(`
-        INSERT INTO bookings (room_id, guest_name, check_in, check_out, status)
-        VALUES (?, ?, ?, ?, 'confirmed')
-      `);
-
-      const result = insert.run(
-        parsedRoomId,
-        guestName.trim(),
-        checkIn,
-        checkOut
-      );
-
-      return {
-        id: result.lastInsertRowid,
-        guestName: guestName.trim(),
-        checkIn,
-        checkOut,
-        status: 'confirmed',
-        room: {
-          id: room.id,
-          roomNo: room.room_no,
-          type: room.type,
-          price: Number(room.price)
-        }
-      };
-    });
-
-    const newBooking = bookTransaction();
-    res.status(201).json(newBooking);
-  } catch (error) {
-    if (error.statusCode) {
-      return res.status(error.statusCode).json({
-        error: error.message,
-        code: error.code
+    if (!room) {
+      return res.status(404).json({
+        error: 'Room not found.',
+        code: 'ROOM_NOT_FOUND'
       });
     }
 
-    console.error('Error creating booking:', error);
+    if (room.status.toLowerCase() !== 'available') {
+      return res.status(400).json({
+        error: `Room ${room.room_no} is currently marked as ${room.status} and cannot be booked.`,
+        code: 'ROOM_UNAVAILABLE'
+      });
+    }
 
+    const conflict = await db.prepare(`
+      SELECT id FROM bookings
+      WHERE room_id = ?
+        AND status = 'confirmed'
+        AND check_in < ?
+        AND check_out > ?
+      LIMIT 1
+    `).get(parsedRoomId, checkOut, checkIn);
+
+    if (conflict) {
+      return res.status(409).json({
+        error: 'Those dates overlap an existing reservation. Try another room or date range.',
+        code: 'BOOKING_CONFLICT'
+      });
+    }
+
+    const insert = await db.prepare(`
+      INSERT INTO bookings (room_id, guest_name, check_in, check_out, status)
+      VALUES (?, ?, ?, ?, 'confirmed')
+    `).run(
+      parsedRoomId,
+      guestName.trim(),
+      checkIn,
+      checkOut
+    );
+
+    const newBooking = {
+      id: insert.lastInsertRowid,
+      guestName: guestName.trim(),
+      checkIn,
+      checkOut,
+      status: 'confirmed',
+      room: {
+        id: room.id,
+        roomNo: room.room_no,
+        type: room.type,
+        price: Number(room.price)
+      }
+    };
+
+    res.status(201).json(newBooking);
+  } catch (error) {
+    console.error('Error creating booking:', error);
     res.status(500).json({
       error: 'Failed to create booking.',
       code: 'SERVER_ERROR'
@@ -850,7 +861,7 @@ app.post('/api/bookings', (req, res) => {
 });
 
 // DELETE /api/bookings/:id
-app.delete('/api/bookings/:id', (req, res) => {
+app.delete('/api/bookings/:id', async (req, res) => {
   const bookingId = parseInt(req.params.id, 10);
 
   if (isNaN(bookingId)) {
@@ -861,7 +872,7 @@ app.delete('/api/bookings/:id', (req, res) => {
   }
 
   try {
-    const booking = db.prepare(`
+    const booking = await db.prepare(`
       SELECT b.id, b.guest_name, r.room_no
       FROM bookings b
       JOIN rooms r ON b.room_id = r.id
@@ -875,7 +886,9 @@ app.delete('/api/bookings/:id', (req, res) => {
       });
     }
 
-    db.prepare('DELETE FROM bookings WHERE id = ?').run(bookingId);
+    await db.prepare(
+      'DELETE FROM bookings WHERE id = ?'
+    ).run(bookingId);
 
     res.json({
       ok: true,
@@ -895,9 +908,6 @@ app.delete('/api/bookings/:id', (req, res) => {
 // ==========================================
 // OPERATIONS EXTENSION API
 // ==========================================
-
-// These resources deliberately use the local SQLite database only.
-// The whitelist below keeps request fields and SQL identifiers explicit.
 
 const extensionResources = {
   guests: {
@@ -986,6 +996,9 @@ const extensionResources = {
     hasUpdatedAt: true
   }
 };
+// ==========================================
+// EXTENSION API HELPERS
+// ==========================================
 
 function extensionError(res, status, code, error) {
   return res.status(status).json({ error, code });
@@ -1006,7 +1019,11 @@ function extensionValue(value, field) {
     return value === true || value === 1 || value === '1' ? 1 : 0;
   }
 
-  if (typeof value !== 'string' && field !== 'details' && field !== 'dimensions') {
+  if (
+    typeof value !== 'string' &&
+    field !== 'details' &&
+    field !== 'dimensions'
+  ) {
     return null;
   }
 
@@ -1021,7 +1038,7 @@ function extensionRow(row) {
       try {
         row[field] = JSON.parse(row[field]);
       } catch (error) {
-        // Preserve legacy text
+        // Preserve legacy text.
       }
     }
   }
@@ -1030,7 +1047,11 @@ function extensionRow(row) {
 }
 
 function extensionPayload(req, resource, isUpdate) {
-  if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+  if (
+    !req.body ||
+    typeof req.body !== 'object' ||
+    Array.isArray(req.body)
+  ) {
     return {
       error: 'Request body must be a JSON object.',
       code: 'INVALID_REQUEST'
@@ -1054,9 +1075,11 @@ function extensionPayload(req, resource, isUpdate) {
 
       if (
         value === null ||
-        (typeof value === 'string' &&
+        (
+          typeof value === 'string' &&
           !value.trim() &&
-          resource.required.includes(field))
+          resource.required.includes(field)
+        )
       ) {
         return {
           error: `${field} is invalid.`,
@@ -1104,18 +1127,24 @@ function extensionPayload(req, resource, isUpdate) {
   return { values };
 }
 
+// ==========================================
+// REGISTER EXTENSION RESOURCE ROUTES
+// ==========================================
+
 function registerExtensionResource(name, resource, routeName) {
   const route = `/api/${routeName}`;
 
-  app.get(route, (req, res) => {
+  // GET all records
+  app.get(route, async (req, res) => {
     try {
-      const rows = db.prepare(
+      const rows = await db.prepare(
         `SELECT * FROM ${resource.table} ORDER BY id DESC`
       ).all();
 
       res.json(rows.map(extensionRow));
     } catch (error) {
       console.error(`Error reading ${name}:`, error);
+
       extensionError(
         res,
         500,
@@ -1125,15 +1154,21 @@ function registerExtensionResource(name, resource, routeName) {
     }
   });
 
-  app.get(`${route}/:id`, (req, res) => {
+  // GET one record
+  app.get(`${route}/:id`, async (req, res) => {
     const id = Number(req.params.id);
 
     if (!Number.isInteger(id) || id < 1) {
-      return extensionError(res, 400, 'INVALID_ID', 'Invalid record ID.');
+      return extensionError(
+        res,
+        400,
+        'INVALID_ID',
+        'Invalid record ID.'
+      );
     }
 
     try {
-      const row = db.prepare(
+      const row = await db.prepare(
         `SELECT * FROM ${resource.table} WHERE id = ?`
       ).get(id);
 
@@ -1149,6 +1184,7 @@ function registerExtensionResource(name, resource, routeName) {
       res.json(extensionRow(row));
     } catch (error) {
       console.error(`Error reading ${name}:`, error);
+
       extensionError(
         res,
         500,
@@ -1158,27 +1194,38 @@ function registerExtensionResource(name, resource, routeName) {
     }
   });
 
-  app.post(route, (req, res) => {
+  // CREATE record
+  app.post(route, async (req, res) => {
     const payload = extensionPayload(req, resource, false);
 
     if (payload.error) {
-      return extensionError(res, 400, payload.code, payload.error);
+      return extensionError(
+        res,
+        400,
+        payload.code,
+        payload.error
+      );
     }
 
     try {
       const fields = Object.keys(payload.values);
 
-      const result = db.prepare(
-        `INSERT INTO ${resource.table} (${fields.join(', ')}) VALUES (${fields.map(() => '?').join(', ')})`
+      const result = await db.prepare(
+        `INSERT INTO ${resource.table}
+        (${fields.join(', ')})
+        VALUES (${fields.map(() => '?').join(', ')})`
       ).run(...fields.map(field => payload.values[field]));
 
-      const created = db.prepare(
+      const created = await db.prepare(
         `SELECT * FROM ${resource.table} WHERE id = ?`
       ).get(result.lastInsertRowid);
 
       res.status(201).json(extensionRow(created));
     } catch (error) {
-      if (error.code && error.code.startsWith('SQLITE_CONSTRAINT')) {
+      if (
+        error.code &&
+        error.code.startsWith('SQLITE_CONSTRAINT')
+      ) {
         return extensionError(
           res,
           409,
@@ -1198,25 +1245,42 @@ function registerExtensionResource(name, resource, routeName) {
     }
   });
 
-  app.put(`${route}/:id`, (req, res) => {
+  // UPDATE record
+  app.put(`${route}/:id`, async (req, res) => {
     const id = Number(req.params.id);
 
     if (!Number.isInteger(id) || id < 1) {
-      return extensionError(res, 400, 'INVALID_ID', 'Invalid record ID.');
+      return extensionError(
+        res,
+        400,
+        'INVALID_ID',
+        'Invalid record ID.'
+      );
     }
 
     const payload = extensionPayload(req, resource, true);
 
     if (payload.error) {
-      return extensionError(res, 400, payload.code, payload.error);
+      return extensionError(
+        res,
+        400,
+        payload.code,
+        payload.error
+      );
     }
 
     try {
       const fields = Object.keys(payload.values);
 
-      const result = db.prepare(
-        `UPDATE ${resource.table} SET ${fields.map(field => `${field} = ?`).join(', ')}${resource.hasUpdatedAt ? ', updated_at = CURRENT_TIMESTAMP' : ''} WHERE id = ?`
-      ).run(...fields.map(field => payload.values[field]), id);
+      const result = await db.prepare(
+        `UPDATE ${resource.table}
+         SET ${fields.map(field => `${field} = ?`).join(', ')}
+         ${resource.hasUpdatedAt ? ', updated_at = CURRENT_TIMESTAMP' : ''}
+         WHERE id = ?`
+      ).run(
+        ...fields.map(field => payload.values[field]),
+        id
+      );
 
       if (!result.changes) {
         return extensionError(
@@ -1227,13 +1291,16 @@ function registerExtensionResource(name, resource, routeName) {
         );
       }
 
-      res.json(
-        extensionRow(
-          db.prepare(`SELECT * FROM ${resource.table} WHERE id = ?`).get(id)
-        )
-      );
+      const updated = await db.prepare(
+        `SELECT * FROM ${resource.table} WHERE id = ?`
+      ).get(id);
+
+      res.json(extensionRow(updated));
     } catch (error) {
-      if (error.code && error.code.startsWith('SQLITE_CONSTRAINT')) {
+      if (
+        error.code &&
+        error.code.startsWith('SQLITE_CONSTRAINT')
+      ) {
         return extensionError(
           res,
           409,
@@ -1253,15 +1320,21 @@ function registerExtensionResource(name, resource, routeName) {
     }
   });
 
-  app.delete(`${route}/:id`, (req, res) => {
+  // DELETE record
+  app.delete(`${route}/:id`, async (req, res) => {
     const id = Number(req.params.id);
 
     if (!Number.isInteger(id) || id < 1) {
-      return extensionError(res, 400, 'INVALID_ID', 'Invalid record ID.');
+      return extensionError(
+        res,
+        400,
+        'INVALID_ID',
+        'Invalid record ID.'
+      );
     }
 
     try {
-      const result = db.prepare(
+      const result = await db.prepare(
         `DELETE FROM ${resource.table} WHERE id = ?`
       ).run(id);
 
@@ -1288,6 +1361,7 @@ function registerExtensionResource(name, resource, routeName) {
   });
 }
 
+// Register all extension resources and aliases
 for (const [name, resource] of Object.entries(extensionResources)) {
   registerExtensionResource(name, resource, name);
 
@@ -1296,27 +1370,38 @@ for (const [name, resource] of Object.entries(extensionResources)) {
   });
 }
 
-app.get('/api/analytics/summary', (req, res) => {
+// ==========================================
+// ANALYTICS API
+// ==========================================
+
+app.get('/api/analytics/summary', async (req, res) => {
   try {
-    const summary = {
-      rooms: db.prepare(
-        'SELECT COUNT(*) AS total FROM rooms'
-      ).get().total,
+    const rooms = await db.prepare(
+      'SELECT COUNT(*) AS total FROM rooms'
+    ).get();
 
-      bookings: db.prepare(
-        "SELECT COUNT(*) AS total FROM bookings WHERE status = 'confirmed'"
-      ).get().total,
+    const bookings = await db.prepare(
+      "SELECT COUNT(*) AS total FROM bookings WHERE status = 'confirmed'"
+    ).get();
 
-      openMaintenance: db.prepare(
-        "SELECT COUNT(*) AS total FROM maintenance_tickets WHERE status NOT IN ('resolved', 'closed')"
-      ).get().total,
+    const maintenance = await db.prepare(
+      `SELECT COUNT(*) AS total
+       FROM maintenance_tickets
+       WHERE status NOT IN ('resolved', 'closed')`
+    ).get();
 
-      housekeeping: db.prepare(
-        'SELECT status, COUNT(*) AS total FROM housekeeping_status GROUP BY status'
-      ).all()
-    };
+    const housekeeping = await db.prepare(
+      `SELECT status, COUNT(*) AS total
+       FROM housekeeping_status
+       GROUP BY status`
+    ).all();
 
-    res.json(summary);
+    res.json({
+      rooms: rooms.total,
+      bookings: bookings.total,
+      openMaintenance: maintenance.total,
+      housekeeping
+    });
   } catch (error) {
     console.error('Error reading analytics summary:', error);
 
@@ -1329,7 +1414,10 @@ app.get('/api/analytics/summary', (req, res) => {
   }
 });
 
-// Serve frontend static files
+// ==========================================
+// FRONTEND STATIC FILES
+// ==========================================
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Catch-all route for SPA behavior
@@ -1337,7 +1425,10 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Start Server
+// ==========================================
+// START SERVER
+// ==========================================
+
 if (require.main === module) {
   const server = app.listen(PORT, HOST, () => {
     console.log(
@@ -1356,7 +1447,7 @@ if (require.main === module) {
       );
 
       console.error(
-        'You can either free port ${PORT} or specify a different port:'
+        `You can either free port ${PORT} or specify a different port:`
       );
 
       console.error(
